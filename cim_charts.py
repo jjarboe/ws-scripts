@@ -877,7 +877,7 @@ ${:end-for}$
             if type(x) in (int, long, float):
                 # Numbers are returned without quotes
                 return str(x)
-            elif type(x) in (type(''),suds.sax.text.Text, datetime.datetime):
+            elif type(x) in (type(''),type(u''),suds.sax.text.Text, datetime.datetime):
                 # Things that will typically be treated as strings get double quotes
                 return '"'+str(x)+'"'
             else:
