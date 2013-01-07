@@ -28,6 +28,7 @@
 import os, urllib, datetime, zlib
 from base64 import standard_b64decode
 from optparse import OptionParser
+from suds import WebFault
 
 # -----------------------------------------------------------------------------
 # Base class for all the web service clients
@@ -69,7 +70,7 @@ class CoverityWebServiceClient(object):
             raise ValueError('Invalid webservice_type: '+webservice_type)
 
         api_version = int(api_version)
-        
+ 
         # The v4 API doesn't include the admin service
         if webservice_type in ('administration',) and api_version >= 4:
             raise ValueError('Invalid service type "%s" for API version %d'
@@ -88,6 +89,7 @@ class CoverityWebServiceClient(object):
         except:
             print self.wsdlFile
             raise
+        self.api_version = api_version
         self.security = self.Security()
         self.token = self.UsernameToken(user, password)
         self.security.tokens.append(self.token)
@@ -191,6 +193,7 @@ class CoverityServiceClient(object):
             self.admin = CoverityAdminServiceClient(*args, **kw)
         self.defect = CoverityDefectServiceClient(*args, **kw)
         self.config = CoverityConfigServiceClient(*args, **kw)
+        self.api_version = self.defect.api_version
     
 global client
 client = CoverityServiceClient()
@@ -296,6 +299,7 @@ class WSOpts:
     self.parser.set_defaults(snapshot_op="new")
     self.parser.set_defaults(component="all")
     self.parser.set_defaults(excludeComponents=False)
+    self.parser.set_defaults(api_version=4)
 
     self.parser.add_option("--host", dest="host", help="host of CIM")
     self.parser.add_option("--port",  dest="port", help="port of CIM")
@@ -323,6 +327,8 @@ class WSOpts:
         help='Classifications to include (comma-separated, or "all")')
     self.parser.add_option("--days", dest="days", type=int, default=0,
         help="Limit to last <n> days (default 0==no limit)")
+    self.parser.add_option("--api-version", dest="api_version", type=int,
+        default=4, help="Web services API version number to use")
     self.parser.add_option("--component", dest="component", default='all',
         help='Components to include (comma-separated, or "all")')
     self.parser.add_option("--excludeComponents", action='store_true', dest="componentExclude",
@@ -732,7 +738,13 @@ class DefectHandler(object):
         if name in self._streamDefectFields:
             self.getStreamDefect()
             return getattr(self, name)
-        return getattr(self.defectDO, name)
+        try:
+            v = getattr(self.defectDO, name)
+        except Exception, e:
+            v = [x.attributeValueId.name for x in self.defectDO.defectStateCustomAttributeValues if x.attributeDefinitionId.name==name]
+            if v: v = v[0]
+            else: raise e
+        return v
 
     def __str__(self):
         return '%s @ %s' % (self.cid, self.url)
@@ -749,7 +761,13 @@ class DefectHandler(object):
             # If that's not set, just use the global scope
             if scope is None:
                 scope = '*/*'
-            f = client.defect.getDO('streamDefectFilterSpecDataObj',
+            if client.api_version > 4:
+              f = client.defect.getDO('streamDefectFilterSpecDataObj',
+                includeDefectInstances = True,
+                includeHistory = True,
+                streamIdList = self.getStreams())
+            else:
+              f = client.defect.getDO('streamDefectFilterSpecDataObj',
                 includeDefectInstances = True,
                 includeHistory = True,
                 scopePattern = scope)
@@ -768,6 +786,24 @@ class DefectHandler(object):
         for f in self._streamDefectFields:
             setattr(self, f, getattr(streamDefectDO, f))
         
+    # Add an "origin" attribute that identifies the source of the defect
+    def getOrigin(self):
+        cn = self.defectDO.checkerName
+        if '.' in cn:
+            return cn.split('.')[0]
+        return 'Coverity'
+    origin = property(getOrigin)
+
+    # Add a "checkerDescription" attribute
+    def getCheckerDescription(self):
+        class D: pass
+        d = D()
+        d.checkerName = self.defectDO.checkerName
+        d.subcategory = self.defectDO.checkerSubcategory
+        d.domain = self.defectDO.domain
+        return CheckerDescription(d)
+    checkerDescription = property(getCheckerDescription)
+
     # Add a "scope" attribute that identifies the function if available
     def getScope(self):
         try:
@@ -787,6 +823,25 @@ class DefectHandler(object):
         return client.defect.create_url(self.cid, self.projId)
     url = property(getUrl)
 
+    def getStreams(self):
+        streamIdDOs = []
+        for proj in self._projectDOs:
+            try:
+                streamIdDOs.extend(self.getStreamsForProject(proj))
+            except:
+                pass
+        return streamIdDOs
+
+    def getStreamsForProject(self, proj):
+        try:
+            # before v4, the stream id had a "type" attribute
+            streamIdDOs = [s.id for s in proj.streams
+                            if s.id.type != 'SOURCE']
+        except AttributeError:
+            # v4 and later don't have "type", but we also don't need
+            # to filter on it.  Just grab all the stream ids.
+            streamIdDOs = [s.id for s in proj.streams]
+
     # Add a "projId" attribute with the containing CIM project id
     def getProjId(self):
         global client
@@ -798,16 +853,11 @@ class DefectHandler(object):
             # Look through all projects for this CID
             for proj in self._projectDOs:
                 try:
-                    # before v4, the stream id had a "type" attribute
-                    streamIdDOs = [s.id for s in proj.streams
-                                    if s.id.type != 'SOURCE']
-                except AttributeError:
-                    # v4 and later don't have "type", but we also don't need
-                    # to filter on it.  Just grab all the stream ids.
-                    streamIdDOs = [s.id for s in proj.streams]
+                    streamIdDOs = self.getStreamsForProject(proj)
                 except:
-                    # skip these streams if there are any other exceptions
+                    # skip these streams if there are any exceptions
                     continue
+
                 mergedDefectFilterDO = client.defect.getDO(
                     'mergedDefectFilterSpecDataObj',
                     cidList = [self.defectDO.cid],

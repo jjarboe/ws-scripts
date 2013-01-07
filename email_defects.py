@@ -109,8 +109,14 @@ class OwnerReporter(WebService.DefectReporter):
         Get the most recent owner for defect "md", based on the defect history
         over the relevant time period.
         '''
-        changes = self._client.defect.getMergedDefectHistory(md.cid, self.scope.triage_scope())
- 
+        try:
+          if self._client.api_version > 4:
+            changes = self._client.defect.getMergedDefectHistory(md.cid, self.scope.streamIdDOs)
+          else:
+            changes = self._client.defect.getMergedDefectHistory(md.cid, self.scope.triage_scope())
+        except WebService.WebFault:
+          print md.cid, self.scope.triage_scope()
+          raise 
         # Walk through history in reverse order so we find the most
         # recent changes first
         for rec in reversed(changes):
@@ -205,7 +211,7 @@ def main():
         sys.exit(-1)
 
     # Open the base WS client services
-    WebService.client.connect(api_version=4, options=parser.options)
+    WebService.client.connect(api_version=parser.options.api_version, options=parser.options)
 
     # Process the defect filters
     scope = parser.defect_scope(WebService.client)
