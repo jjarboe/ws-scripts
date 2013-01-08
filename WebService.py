@@ -25,10 +25,11 @@
 # can likely be made to work, but might require some changes.  That is especially
 # true of the helper classes like the Reporter, Handler, Processor, and so forth.
 
-import os, urllib, datetime, zlib
+import os, urllib, datetime, zlib, sys
 from base64 import standard_b64decode
 from optparse import OptionParser
 from suds import WebFault
+import logging
 
 # -----------------------------------------------------------------------------
 # Base class for all the web service clients
@@ -84,6 +85,8 @@ class CoverityWebServiceClient(object):
             + 'service?wsdl'
             )
 
+        logging.basicConfig(level = logging.INFO)
+        #logging.getLogger('suds.client').setLevel(logging.DEBUG)
         try:
             self.client = self.Client(self.wsdlFile)
         except:
@@ -728,6 +731,15 @@ class DefectHandler(object):
             # Populate the streamDefectDataObj fields
             self.getStreamDefect(streamDefectDO=streamDefectDO, scope=scope)
 
+    def normalizedAttributeName(self, name):
+        d = {
+            'status': 'DefectStatus',
+            'owner': 'Owner',
+        }
+        if name in d:
+            return d[name]
+        return name
+
     def __getattr__(self, name):
         '''
         Redirect unknown attribute lookups to the underlying
@@ -741,9 +753,17 @@ class DefectHandler(object):
         try:
             v = getattr(self.defectDO, name)
         except Exception, e:
-            v = [x.attributeValueId.name for x in self.defectDO.defectStateCustomAttributeValues if x.attributeDefinitionId.name==name]
+            try:
+                v = [x.attributeValueId.name for x in self.defectDO.defectStateCustomAttributeValues if x.attributeDefinitionId.name==name]
+            except AttributeError:
+                # In v7 and newer, attributes are stored in the
+                # defectStateAttributeValues member.  They use slightly
+                # different names, so we need to normalize
+                v = [x.attributeValueId.name for x in self.defectDO.defectStateAttributeValues if x.attributeDefinitionId.name==self.normalizedAttributeName(name)]
             if v: v = v[0]
-            else: raise e
+            else:
+                sys.stderr.write('ATTRIBUTE "%s" %s\n'%(name,self.defectDO))
+                raise e
         return v
 
     def __str__(self):

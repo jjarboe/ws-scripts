@@ -122,11 +122,16 @@ class OwnerReporter(WebService.DefectReporter):
         for rec in reversed(changes):
             if self._cutoff is None or rec.dateModified > self._cutoff:
                 try:
-                    if rec.ownerChange:
-                        if self.allow_unassigned or rec.ownerChange.newValue not in (None, 'Unassigned'):
-                            if rec.ownerChange.newValue == 'Unassigned':
+                    newOwner = rec.ownerChange
+                except AttributeError:
+                    newOwner = filter(None, [x for x in rec.attributeChanges if x and x.fieldName == 'owner'])
+                    if newOwner: newOwner = newOwner[0]
+                try:
+                    if newOwner:
+                        if self.allow_unassigned or newOwner.newValue not in (None, 'Unassigned'):
+                            if newOwner.newValue == 'Unassigned':
                                 return [None]
-                            return([rec.ownerChange.newValue])
+                            return([newOwner.newValue])
                 except:
                     pass
 
