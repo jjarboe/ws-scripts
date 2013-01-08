@@ -25,11 +25,10 @@
 # can likely be made to work, but might require some changes.  That is especially
 # true of the helper classes like the Reporter, Handler, Processor, and so forth.
 
-import os, urllib, datetime, zlib, sys
+import os, urllib, datetime, zlib, sys, atexit, logging
 from base64 import standard_b64decode
 from optparse import OptionParser
 from suds import WebFault
-import logging
 
 # -----------------------------------------------------------------------------
 # Base class for all the web service clients
@@ -692,7 +691,58 @@ class Component(CachedCoverityObject):
             ret.components.extend([x for x in i.components if x.componentId.name==v])
             ret.defectRules.extend([x for x in i.defectRules if x.componentId.name==v])
         return ret
-    
+
+class AttributeFieldMapper(object):
+    '''
+    In v7 and newer, several standard attributes that used to be data members
+    in mergedDefectDataObj are now stored in the defectStateAttributeValues
+    member.  They use slightly different names, and this class helps to
+    normalize the names.
+    '''
+
+    _mapped_names = {
+        'status': 'DefectStatus',
+        'owner': 'Owner',
+        'action': 'Action',
+        'severity': 'Severity',
+        'classification': 'Classification',
+        #'': 'FixTarget',
+        #'': 'ExternalReference',
+        #'': 'Comment',
+    }
+
+    def __init__(self):
+        self._known_defect_fields = set([])
+        self._used_defect_fields = set([])
+        # When the program exits, print a list of used, unknown fields
+        # when appropriate.
+        atexit.register(self.show_missing_defect_fields)
+
+    def note_fields(self, *names):
+        # Keep track of known defect fields so we can print alerts for
+        # unknown fields used.
+        self._known_defect_fields.update(*names)
+
+    def note_used(self, name):
+        # Keep track of used defect fields so we can print alerts for
+        # unknown fields used.
+        self._used_defect_fields.add(name)
+
+    def normalize(self, name):
+        # Normalize name to the new attribute definition id name
+        return self._mapped_names.get(name, name)
+
+    def show_missing_defect_fields(self, *args, **kw):
+        # Print used, unknown fields
+        missing_fields = self._used_defect_fields - self._known_defect_fields - set(self._mapped_names.keys())
+
+        if missing_fields:
+            sys.stderr.write('\nMISSING DEFECT FIELDS\n')
+            for f in missing_fields:
+                sys.stderr.write('%s\n' % (f,) )
+
+_attr_mapper = AttributeFieldMapper()
+
 class DefectHandler(object):
     '''
     Helper class to facilitate template formatting of a defect from CIM.
@@ -731,36 +781,33 @@ class DefectHandler(object):
             # Populate the streamDefectDataObj fields
             self.getStreamDefect(streamDefectDO=streamDefectDO, scope=scope)
 
-    def normalizedAttributeName(self, name):
-        d = {
-            'status': 'DefectStatus',
-            'owner': 'Owner',
-        }
-        if name in d:
-            return d[name]
-        return name
-
     def __getattr__(self, name):
         '''
         Redirect unknown attribute lookups to the underlying
         mergedDefectDataObject
         '''
+        global _attr_mapper
+
         # If we're failing to access streamDefectDataObj members, then
         # we need to call self.getStreamDefect()
         if name in self._streamDefectFields:
             self.getStreamDefect()
             return getattr(self, name)
+
+        class Dummy(object): pass
+        _attr_mapper.note_fields( set(dir(self.defectDO)) - set(dir(Dummy())) )
+        _attr_mapper.note_fields([x.attributeDefinitionId.name for x in self.defectDO.defectStateAttributeValues])
+        _attr_mapper.note_used(name)
+
         try:
             v = getattr(self.defectDO, name)
         except Exception, e:
             try:
                 v = [x.attributeValueId.name for x in self.defectDO.defectStateCustomAttributeValues if x.attributeDefinitionId.name==name]
             except AttributeError:
-                # In v7 and newer, attributes are stored in the
-                # defectStateAttributeValues member.  They use slightly
-                # different names, so we need to normalize
-                v = [x.attributeValueId.name for x in self.defectDO.defectStateAttributeValues if x.attributeDefinitionId.name==self.normalizedAttributeName(name)]
-            if v: v = v[0]
+                v = [x.attributeValueId.name for x in self.defectDO.defectStateAttributeValues if x.attributeDefinitionId.name==_attr_mapper.normalize(name)]
+            if v:
+                v = v[0]
             else:
                 sys.stderr.write('ATTRIBUTE "%s" %s\n'%(name,self.defectDO))
                 raise e
