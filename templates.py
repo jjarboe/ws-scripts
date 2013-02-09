@@ -170,7 +170,7 @@ In ${
 try: emit(inst.function.functionDisplayName)
 except AttributeError: emit('<unknown function>') }$ (${inst.function.fileId.filePathname}$)
 ${src = SourceFile(defect.streamId, inst.function.fileId)
-}$${for event in inst.events:}$${if not event.eventNumber:}$
+}$${for event in inst.events:}$${if (event.main or not event.eventNumber or getattr(event,"eventKind",'PATH') != 'PATH') and (event.eventTag not in ('excluded','rule') and getattr(event, 'eventKind','PATH')!='PATH'):}$
 
 "${event.eventTag}$" event
 
