@@ -796,7 +796,12 @@ class DefectHandler(object):
 
         class Dummy(object): pass
         _attr_mapper.note_fields( set(dir(self.defectDO)) - set(dir(Dummy())) )
-        _attr_mapper.note_fields([x.attributeDefinitionId.name for x in self.defectDO.defectStateAttributeValues])
+        try:
+            self.defectDO.defectStateAttributeValues
+        except AttributeError:
+            pass
+        else:
+            _attr_mapper.note_fields([x.attributeDefinitionId.name for x in self.defectDO.defectStateAttributeValues])
         _attr_mapper.note_used(name)
 
         try:
